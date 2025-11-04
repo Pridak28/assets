@@ -59,3 +59,6 @@ add-tokenlist: build
 
 add-tokenlist-extended: build
 	bin/assets add-tokenlist-extended $(asset_id)
+
+upload-document: build
+	bin/assets upload-document $(asset_id) $(document_path)

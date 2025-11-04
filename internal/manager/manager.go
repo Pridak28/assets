@@ -30,6 +30,7 @@ func InitCommands() {
 	rootCmd.AddCommand(addTokenCmd)
 	rootCmd.AddCommand(addTokenlistCmd)
 	rootCmd.AddCommand(addTokenlistExtendedCmd)
+	rootCmd.AddCommand(uploadDocumentCmd)
 }
 
 var (
@@ -92,6 +93,23 @@ var (
 		Short: "Adds token to tokenlist-extended.json",
 		Run: func(cmd *cobra.Command, args []string) {
 			handleAddTokenList(args, path.TokenlistExtended)
+		},
+	}
+
+	uploadDocumentCmd = &cobra.Command{
+		Use:   "upload-document [asset_id] [document_path]",
+		Short: "Uploads a document file to an asset directory",
+		Long: `Uploads a document file (PDF, DOC, DOCX, TXT, MD) to an asset directory.
+Example: assets upload-document c60_t0x4Fabb145d64652a948d72533023f6E7A623C7C53 /path/to/whitepaper.pdf`,
+		Run: func(cmd *cobra.Command, args []string) {
+			if len(args) != 2 {
+				log.Fatal("2 arguments were expected: asset_id and document_path")
+			}
+
+			err := UploadDocument(args[0], args[1])
+			if err != nil {
+				log.Fatalf("Failed to upload document: %v", err)
+			}
 		},
 	}
 )
