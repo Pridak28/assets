@@ -3,6 +3,10 @@ package manager
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	filepath "path/filepath"
+	"strings"
 	"time"
 
 	libFile "github.com/trustwallet/assets-go-libs/file"
@@ -142,4 +146,77 @@ func getAssetInfo(chain coin.Coin, tokenID string) (*info.AssetModel, error) {
 	}
 
 	return &assetModel, nil
+}
+
+// UploadDocument uploads a document file to an asset directory
+func UploadDocument(assetID, documentPath string) error {
+	// Parse asset ID
+	c, tokenID, err := asset.ParseID(assetID)
+	if err != nil {
+		return fmt.Errorf("failed to parse asset id: %v", err)
+	}
+
+	chain, ok := coin.Coins[c]
+	if !ok {
+		return fmt.Errorf("invalid asset")
+	}
+
+	// Validate document file exists
+	if _, err := os.Stat(documentPath); os.IsNotExist(err) {
+		return fmt.Errorf("document file does not exist: %s", documentPath)
+	}
+
+	// Get asset directory path
+	assetDir := filepath.Join("blockchains", chain.Handle, "assets", tokenID)
+
+	// Check if asset directory exists
+	if _, err := os.Stat(assetDir); os.IsNotExist(err) {
+		return fmt.Errorf("asset directory does not exist: %s. Create the asset first using add-token command", assetDir)
+	}
+
+	// Validate file extension
+	ext := strings.ToLower(filepath.Ext(documentPath))
+	allowedExtensions := map[string]bool{
+		".pdf":  true,
+		".doc":  true,
+		".docx": true,
+		".txt":  true,
+		".md":   true,
+	}
+
+	if !allowedExtensions[ext] {
+		return fmt.Errorf("unsupported file extension: %s. Supported extensions: .pdf, .doc, .docx, .txt, .md", ext)
+	}
+
+	// Get filename from path
+	filename := filepath.Base(documentPath)
+
+	// Create destination path
+	destPath := filepath.Join(assetDir, filename)
+
+	// Check if file already exists
+	if _, err := os.Stat(destPath); err == nil {
+		return fmt.Errorf("document file already exists: %s", destPath)
+	}
+
+	// Copy file
+	sourceFile, err := os.Open(documentPath)
+	if err != nil {
+		return fmt.Errorf("failed to open source file: %v", err)
+	}
+	defer sourceFile.Close()
+
+	destFile, err := os.Create(destPath)
+	if err != nil {
+		return fmt.Errorf("failed to create destination file: %v", err)
+	}
+	defer destFile.Close()
+
+	_, err = io.Copy(destFile, sourceFile)
+	if err != nil {
+		return fmt.Errorf("failed to copy file: %v", err)
+	}
+
+	fmt.Printf("Successfully uploaded document to: %s\n", destPath)
+	return nil
 }
