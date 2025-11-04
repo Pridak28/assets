@@ -158,7 +158,7 @@ func UploadDocument(assetID, documentPath string) error {
 
 	chain, ok := coin.Coins[c]
 	if !ok {
-		return fmt.Errorf("invalid asset")
+		return fmt.Errorf("unsupported blockchain: %d", c)
 	}
 
 	// Validate document file exists
@@ -214,6 +214,8 @@ func UploadDocument(assetID, documentPath string) error {
 
 	_, err = io.Copy(destFile, sourceFile)
 	if err != nil {
+		// Clean up incomplete destination file on copy failure
+		os.Remove(destPath)
 		return fmt.Errorf("failed to copy file: %v", err)
 	}
 
