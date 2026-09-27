@@ -1,0 +1,511 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Sever Silaghi Dark Tech</title>
+<style>
+  html, body { margin: 0; background: #000; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<script>
+// 15s dark-tech motion graphic. Deterministic: render(t) draws frame at time t (seconds).
+const W = 1920, H = 1080, CX = W / 2, CY = H / 2;
+const DURATION = 15;
+const cv = document.getElementById('c');
+const ctx = cv.getContext('2d');
+
+const CYAN = '#19f0d8';
+const CYAN_D = '#0a8f82';
+const MONO = '"DejaVu Sans Mono", "Liberation Mono", monospace';
+const SANS = '"DejaVu Sans", "Liberation Sans", sans-serif';
+
+// ---------- helpers ----------
+function rng(seed) { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
+const lerp = (a, b, k) => a + (b - a) * k;
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const easeOut = k => 1 - Math.pow(1 - k, 3);
+const easeInOut = k => k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+const easeBack = k => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(k - 1, 3) + c1 * Math.pow(k - 1, 2); };
+function hash(n) { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+
+// ---------- precomputed scene data ----------
+const R = rng(7);
+const particles = Array.from({ length: 260 }, () => ({
+  x: R() * W, y: R() * H, z: 0.2 + R() * 0.8, sp: 10 + R() * 40, ph: R() * 6.28
+}));
+// circuit traces from screen edges toward logo ring
+const traces = Array.from({ length: 26 }, (_, i) => {
+  const r = rng(100 + i);
+  const side = i % 4;
+  let x, y;
+  if (side === 0) { x = 0; y = r() * H; }
+  else if (side === 1) { x = W; y = r() * H; }
+  else if (side === 2) { x = r() * W; y = 0; }
+  else { x = r() * W; y = H; }
+  const pts = [[x, y]];
+  const ang = Math.atan2(CY - y, CX - x);
+  const ex = CX - Math.cos(ang) * 300, ey = CY - Math.sin(ang) * 300;
+  // manhattan-ish with 45° bends
+  const midX = lerp(x, ex, 0.35 + r() * 0.3);
+  pts.push([midX, y]);
+  const dy = ey - y, dx = ex - midX;
+  const d = Math.min(Math.abs(dx), Math.abs(dy));
+  pts.push([midX + Math.sign(dx) * d, y + Math.sign(dy) * d]);
+  pts.push([ex, ey]);
+  return { pts, delay: r() * 1.2, speed: 0.9 + r() * 0.6 };
+});
+const hexLines = Array.from({ length: 40 }, (_, i) => {
+  const r = rng(900 + i); let s = '';
+  for (let k = 0; k < 8; k++) s += Math.floor(r() * 65536).toString(16).padStart(4, '0') + ' ';
+  return s.toUpperCase();
+});
+
+// S-curve (in logo units: 256x256 box, centred at 128,128)
+function sPath(c) {
+  c.beginPath();
+  c.moveTo(160, 76);
+  c.bezierCurveTo(140, 62, 90, 60, 78, 84);
+  c.bezierCurveTo(66, 108, 100, 122, 128, 128);
+  c.bezierCurveTo(158, 134, 192, 148, 184, 172);
+  c.bezierCurveTo(176, 196, 120, 200, 72, 188);
+}
+const S_LEN = 520; // approx path length in logo units
+
+// ---------- drawing layers ----------
+function drawBackground(t) {
+  const g = ctx.createRadialGradient(CX, CY, 0, CX, CY, 1100);
+  g.addColorStop(0, '#04161a');
+  g.addColorStop(0.5, '#020709');
+  g.addColorStop(1, '#000');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, W, H);
+}
+
+function drawGridFloor(t) {
+  const a = prog(t, 0.3, 2.2) * (1 - prog(t, 14.4, 15)) * 0.55;
+  if (a <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = a;
+  const horizon = CY + 120;
+  ctx.strokeStyle = CYAN_D;
+  ctx.lineWidth = 1;
+  // vertical converging lines
+  for (let i = -24; i <= 24; i++) {
+    ctx.beginPath();
+    ctx.moveTo(CX + i * 18, horizon);
+    ctx.lineTo(CX + i * 160, H + 40);
+    ctx.stroke();
+  }
+  // horizontal lines scrolling toward viewer
+  const scroll = (t * 0.6) % 1;
+  for (let j = 0; j < 18; j++) {
+    const k = (j + scroll) / 18;
+    const y = horizon + Math.pow(k, 2.4) * (H - horizon + 40);
+    ctx.globalAlpha = a * clamp(k * 1.6);
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  // fade to horizon
+  const fg = ctx.createLinearGradient(0, horizon, 0, horizon + 260);
+  fg.addColorStop(0, 'rgba(2,7,9,1)'); fg.addColorStop(1, 'rgba(2,7,9,0)');
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = fg; ctx.fillRect(0, horizon - 2, W, 262);
+  ctx.restore();
+}
+
+function drawParticles(t) {
+  const a = prog(t, 0.5, 2.5) * (1 - prog(t, 14.4, 15));
+  ctx.save();
+  for (const p of particles) {
+    const y = (p.y - t * p.sp * p.z + H * 10) % H;
+    const x = p.x + Math.sin(t * 0.7 + p.ph) * 12 * p.z;
+    const tw = 0.5 + 0.5 * Math.sin(t * 3 + p.ph * 3);
+    ctx.globalAlpha = a * p.z * (0.25 + 0.6 * tw);
+    ctx.fillStyle = p.z > 0.85 ? '#bffff7' : CYAN;
+    ctx.fillRect(x, y, 1.2 + p.z * 2, 1.2 + p.z * 2);
+  }
+  ctx.restore();
+}
+
+function polylineLength(pts) {
+  let L = 0; for (let i = 1; i < pts.length; i++) L += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); return L;
+}
+function drawPartial(pts, k) {
+  const L = polylineLength(pts) * k; let acc = 0;
+  ctx.beginPath(); ctx.moveTo(pts[0][0], pts[0][1]);
+  let head = pts[0];
+  for (let i = 1; i < pts.length; i++) {
+    const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
+    const seg = Math.hypot(x1 - x0, y1 - y0);
+    if (acc + seg >= L) { const f = (L - acc) / seg; head = [lerp(x0, x1, f), lerp(y0, y1, f)]; ctx.lineTo(head[0], head[1]); break; }
+    ctx.lineTo(x1, y1); acc += seg; head = [x1, y1];
+  }
+  ctx.stroke();
+  return head;
+}
+
+function drawTraces(t) {
+  const fade = 1 - prog(t, 8.5, 10);
+  if (fade <= 0) return;
+  ctx.save();
+  ctx.lineCap = 'round';
+  for (const tr of traces) {
+    const k = easeInOut(prog(t, 1.6 + tr.delay, 1.6 + tr.delay + 1.3 / tr.speed));
+    if (k <= 0) continue;
+    ctx.globalAlpha = 0.35 * fade;
+    ctx.strokeStyle = CYAN_D; ctx.lineWidth = 1.5;
+    const head = drawPartial(tr.pts, k);
+    // glowing head pulse
+    if (k < 1) {
+      ctx.globalAlpha = fade;
+      ctx.shadowColor = CYAN; ctx.shadowBlur = 20;
+      ctx.fillStyle = '#dffffa';
+      ctx.beginPath(); ctx.arc(head[0], head[1], 3.5, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+    } else {
+      // terminal node
+      const e = tr.pts[tr.pts.length - 1];
+      ctx.globalAlpha = 0.8 * fade;
+      ctx.strokeStyle = CYAN; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(e[0], e[1], 4, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function glowStroke(width, color, blur, alpha) {
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = color; ctx.lineWidth = width;
+  ctx.shadowColor = CYAN; ctx.shadowBlur = blur;
+  ctx.stroke();
+}
+
+// Logo lockup: position/scale over time
+function logoTransform(t) {
+  const up = easeInOut(prog(t, 8.2, 9.4));
+  const s = lerp(1.0, 0.62, up);
+  const y = lerp(CY, CY - 175, up);
+  // final beat zoom
+  const z = 1 + 0.04 * easeOut(prog(t, 13.3, 15));
+  return { x: CX, y, s: s * z };
+}
+
+function drawLogo(t) {
+  const appear = prog(t, 2.6, 3.4);
+  if (appear <= 0) return;
+  const { x, y, s } = logoTransform(t);
+  const fadeOut = 1 - prog(t, 14.3, 15);
+  ctx.save();
+  ctx.translate(x, y); ctx.scale(s, s);
+  ctx.globalAlpha = fadeOut;
+
+  // disc
+  const discR = 250 * easeBack(appear);
+  const dg = ctx.createRadialGradient(0, 0, 0, 0, 0, discR);
+  dg.addColorStop(0, 'rgba(12,70,68,0.9)');
+  dg.addColorStop(0.6, 'rgba(4,24,26,0.95)');
+  dg.addColorStop(1, 'rgba(1,6,8,0.98)');
+  ctx.fillStyle = dg;
+  ctx.beginPath(); ctx.arc(0, 0, discR, 0, Math.PI * 2); ctx.fill();
+
+  // inner fine grid in disc
+  ctx.save();
+  ctx.beginPath(); ctx.arc(0, 0, discR, 0, Math.PI * 2); ctx.clip();
+  ctx.globalAlpha = 0.12 * appear * fadeOut;
+  ctx.strokeStyle = CYAN; ctx.lineWidth = 1;
+  for (let g = -250; g <= 250; g += 25) {
+    ctx.beginPath(); ctx.moveTo(g, -250); ctx.lineTo(g, 250); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-250, g); ctx.lineTo(250, g); ctx.stroke();
+  }
+  ctx.restore();
+
+  // ring draw-on
+  const ringK = easeInOut(prog(t, 2.8, 4.0));
+  ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.arc(0, 0, 232, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ringK);
+  glowStroke(3, CYAN, 18, 0.9 * fadeOut);
+  ctx.shadowBlur = 0;
+
+  // rotating HUD ticks
+  const rot = t * 0.35;
+  ctx.save(); ctx.rotate(rot);
+  ctx.globalAlpha = 0.7 * prog(t, 3.4, 4.4) * fadeOut;
+  ctx.strokeStyle = CYAN; ctx.lineWidth = 2;
+  for (let i = 0; i < 72; i++) {
+    const a = (i / 72) * Math.PI * 2;
+    const r1 = 258, r2 = i % 6 === 0 ? 278 : 266;
+    ctx.beginPath(); ctx.moveTo(Math.cos(a) * r1, Math.sin(a) * r1); ctx.lineTo(Math.cos(a) * r2, Math.sin(a) * r2); ctx.stroke();
+  }
+  ctx.restore();
+  // counter-rotating arc segments
+  ctx.save(); ctx.rotate(-t * 0.8);
+  ctx.globalAlpha = 0.85 * prog(t, 3.6, 4.6) * fadeOut;
+  ctx.strokeStyle = CYAN; ctx.lineWidth = 5;
+  for (let i = 0; i < 3; i++) {
+    const a0 = i * (Math.PI * 2 / 3);
+    ctx.beginPath(); ctx.arc(0, 0, 300, a0, a0 + 0.6); ctx.stroke();
+  }
+  ctx.restore();
+
+  // corner nodes (like logo)
+  const nodeA = prog(t, 3.8, 4.4) * fadeOut;
+  for (const a of [-2.36, -0.785, 0.785, 2.36]) {
+    const nx = Math.cos(a) * 232, ny = Math.sin(a) * 232;
+    ctx.globalAlpha = nodeA; ctx.fillStyle = CYAN; ctx.shadowColor = CYAN; ctx.shadowBlur = 16;
+    ctx.beginPath(); ctx.arc(nx, ny, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0; ctx.globalAlpha = nodeA * 0.4; ctx.strokeStyle = CYAN; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(nx * 0.85, ny * 0.85); ctx.lineTo(nx * 0.65, ny * 0.65); ctx.stroke();
+  }
+
+  // the S — draw on then glow pulse
+  const sK = easeInOut(prog(t, 3.5, 5.2));
+  const pulse = t > 5.2 ? 0.5 + 0.5 * Math.sin((t - 5.2) * 4) : 0;
+  const flash = Math.max(0, 1 - Math.abs(t - 5.25) * 4);
+  ctx.save();
+  ctx.translate(-128 * 1.6, -128 * 1.6); ctx.scale(1.6, 1.6);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.setLineDash([S_LEN * sK, S_LEN * 2]);
+  sPath(ctx); glowStroke(34, 'rgba(25,240,216,0.25)', 40 + 30 * pulse + 60 * flash, fadeOut);
+  sPath(ctx); glowStroke(22, CYAN, 22 + 10 * pulse, fadeOut);
+  sPath(ctx); glowStroke(6, '#c9fff8', 6, 0.8 * fadeOut);
+  ctx.setLineDash([]);
+  ctx.shadowBlur = 0;
+  // S nodes
+  const sn = prog(t, 5.0, 5.4) * fadeOut;
+  for (const [px, py] of [[128, 128], [128, 196]]) {
+    ctx.globalAlpha = sn; ctx.fillStyle = '#e8fffc'; ctx.shadowColor = CYAN; ctx.shadowBlur = 20;
+    ctx.beginPath(); ctx.arc(px, py, 7, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+
+  // shockwave when S completes
+  const sw = prog(t, 5.2, 6.4);
+  if (sw > 0 && sw < 1) {
+    ctx.globalAlpha = (1 - sw) * 0.8 * fadeOut;
+    ctx.strokeStyle = CYAN; ctx.lineWidth = 4 * (1 - sw) + 1;
+    ctx.shadowColor = CYAN; ctx.shadowBlur = 25;
+    ctx.beginPath(); ctx.arc(0, 0, 250 + easeOut(sw) * 700, 0, Math.PI * 2); ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
+  ctx.restore();
+}
+
+// text decode effect
+const GLYPHS = '01<>/\\#$%&*+=?ABCDEFXZ∆Σ▓▒░';
+function decode(str, k, seed) {
+  let out = '';
+  for (let i = 0; i < str.length; i++) {
+    const threshold = (i / str.length) * 0.8;
+    if (str[i] === ' ' || k > threshold + 0.15) out += str[i];
+    else if (k > threshold - 0.25) out += GLYPHS[Math.floor(hash(seed + i + Math.floor(k * 40)) * GLYPHS.length)];
+    else out += ' ';
+  }
+  return out;
+}
+
+function drawSpacedText(str, x, y, spacing) {
+  // centred text with letter spacing
+  let total = 0; const ws = [];
+  for (const ch of str) { const w = ctx.measureText(ch).width; ws.push(w); total += w + spacing; }
+  total -= spacing;
+  let cx = x - total / 2;
+  let i = 0;
+  for (const ch of str) { ctx.fillText(ch, cx + ws[i] / 2, y); cx += ws[i] + spacing; i++; }
+}
+
+function drawTitle(t) {
+  const k = prog(t, 8.8, 10.4);
+  if (k <= 0) return;
+  const fadeOut = 1 - prog(t, 14.3, 15);
+  const z = 1 + 0.04 * easeOut(prog(t, 13.3, 15));
+  ctx.save();
+  ctx.translate(CX, 0); ctx.scale(z, z); ctx.translate(-CX, 0);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const name = decode('SEVER SILAGHI', k, 3);
+  const y = CY + 150;
+
+  // glitch offsets during reveal and at intervals
+  const glitchOn = (t > 8.8 && t < 10.6) || (t > 12.1 && t < 12.35) || (t > 13.2 && t < 13.4);
+  const gx = glitchOn ? (hash(Math.floor(t * 30)) - 0.5) * 18 : 0;
+
+  ctx.font = `bold 118px ${SANS}`;
+  if (glitchOn) {
+    ctx.globalAlpha = 0.7 * fadeOut;
+    ctx.fillStyle = '#ff2a6d'; drawSpacedText(name, CX + gx - 5, y, 22);
+    ctx.fillStyle = '#00e5ff'; drawSpacedText(name, CX - gx + 5, y, 22);
+  }
+  ctx.globalAlpha = fadeOut;
+  ctx.shadowColor = CYAN; ctx.shadowBlur = 28;
+  ctx.fillStyle = '#eafffc';
+  drawSpacedText(name, CX + gx * 0.3, y, 22);
+  ctx.shadowBlur = 0;
+
+  // glitch slice bars
+  if (glitchOn) {
+    for (let i = 0; i < 4; i++) {
+      const h = hash(Math.floor(t * 30) * 7 + i);
+      ctx.globalAlpha = 0.5 * fadeOut;
+      ctx.fillStyle = i % 2 ? CYAN : '#ff2a6d';
+      ctx.fillRect(CX - 620 + h * 900, y - 60 + h * 120, 80 + h * 260, 3 + h * 6);
+    }
+  }
+
+  // underline scan bar
+  const lk = easeInOut(prog(t, 9.6, 10.6));
+  ctx.globalAlpha = fadeOut;
+  ctx.fillStyle = CYAN; ctx.shadowColor = CYAN; ctx.shadowBlur = 14;
+  ctx.fillRect(CX - 560 * lk, y + 82, 1120 * lk, 3);
+  ctx.shadowBlur = 0;
+
+  // subtitle
+  const sk = prog(t, 10.2, 11.2);
+  if (sk > 0) {
+    ctx.font = `bold 40px ${MONO}`;
+    ctx.fillStyle = CYAN;
+    ctx.globalAlpha = sk * fadeOut;
+    drawSpacedText(decode('// DARK TECH //', sk, 50), CX, y + 140, 16);
+  }
+  // tagline
+  const tk = prog(t, 11.4, 12.6);
+  if (tk > 0) {
+    ctx.font = `24px ${MONO}`;
+    ctx.fillStyle = '#7fd9cf';
+    ctx.globalAlpha = tk * fadeOut * 0.9;
+    drawSpacedText(decode('DECENTRALIZED  ·  SECURE  ·  BUILT FOR THE FUTURE', tk, 90), CX, y + 200, 6);
+  }
+  ctx.restore();
+}
+
+function drawHUD(t) {
+  const a = prog(t, 0.2, 1.0) * (1 - prog(t, 14.3, 15));
+  if (a <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.strokeStyle = CYAN; ctx.lineWidth = 2;
+  const m = 50, L = 70 * easeOut(prog(t, 0.2, 1.2));
+  for (const [x, y, sx, sy] of [[m, m, 1, 1], [W - m, m, -1, 1], [m, H - m, 1, -1], [W - m, H - m, -1, -1]]) {
+    ctx.beginPath(); ctx.moveTo(x, y + sy * L); ctx.lineTo(x, y); ctx.lineTo(x + sx * L, y); ctx.stroke();
+  }
+  ctx.font = `18px ${MONO}`; ctx.fillStyle = CYAN; ctx.textBaseline = 'middle';
+  ctx.textAlign = 'left';
+  const frame = Math.floor(t * 30);
+  ctx.fillText(`REC ● ${String(Math.floor(t)).padStart(2, '0')}:${String(frame % 30).padStart(2, '0')}`, m + 20, m + 30);
+  ctx.fillText('SYS/SEVER.NET  v2.0', m + 20, H - m - 30);
+  ctx.textAlign = 'right';
+  ctx.fillText(`LAT 46.77°N  LON 23.60°E`, W - m - 20, m + 30);
+  const load = Math.min(100, Math.floor(prog(t, 0.5, 8) * 100));
+  ctx.fillText(`CORE LOAD ${String(load).padStart(3, '0')}%`, W - m - 20, H - m - 30);
+  // load bar
+  ctx.globalAlpha = a * 0.3; ctx.fillRect(W - m - 220, H - m - 12, 200, 4);
+  ctx.globalAlpha = a; ctx.fillRect(W - m - 220, H - m - 12, 2 * load, 4);
+
+  // side hex streams
+  ctx.font = `13px ${MONO}`; ctx.textAlign = 'left';
+  const hexA = prog(t, 4.5, 6) * (1 - prog(t, 13.5, 14.3));
+  for (let i = 0; i < 22; i++) {
+    const line = hexLines[(i + Math.floor(t * 6)) % hexLines.length];
+    ctx.globalAlpha = a * hexA * (0.15 + 0.35 * hash(i + Math.floor(t * 6)));
+    ctx.fillText(line, m + 20, 250 + i * 26);
+    ctx.textAlign = 'right';
+    ctx.fillText(hexLines[(i * 3 + Math.floor(t * 8)) % hexLines.length], W - m - 20, 250 + i * 26);
+    ctx.textAlign = 'left';
+  }
+  ctx.restore();
+}
+
+function drawBoot(t) {
+  if (t > 2.8) return;
+  const lines = [
+    '> INITIALIZING SEVER_CORE ...',
+    '> LOADING NEURAL MESH ......... OK',
+    '> DECRYPTING IDENTITY ......... OK',
+    '> ESTABLISHING UPLINK ......... OK',
+    '> ACCESS GRANTED',
+  ];
+  const fade = 1 - prog(t, 2.3, 2.8);
+  ctx.save();
+  ctx.font = `26px ${MONO}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  const cps = 55; // chars per second
+  let budget = Math.max(0, (t - 0.25) * cps);
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    const n = Math.min(ln.length, Math.floor(budget));
+    budget -= ln.length;
+    if (n <= 0) break;
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = i === lines.length - 1 ? '#eafffc' : CYAN;
+    ctx.shadowColor = CYAN; ctx.shadowBlur = i === lines.length - 1 ? 16 : 6;
+    ctx.fillText(ln.slice(0, n), 520, 380 + i * 48);
+    if (n < ln.length || (i === lines.length - 1 && Math.floor(t * 4) % 2 === 0)) {
+      const w = ctx.measureText(ln.slice(0, n)).width;
+      ctx.fillRect(522 + w, 382 + i * 48, 14, 26);
+    }
+  }
+  ctx.restore();
+}
+
+function drawPost(t) {
+  // scanlines
+  ctx.save();
+  ctx.globalAlpha = 0.12; ctx.fillStyle = '#000';
+  for (let y = 0; y < H; y += 3) ctx.fillRect(0, y, W, 1);
+  // rolling scan band
+  const by = ((t * 260) % (H + 300)) - 150;
+  const bg = ctx.createLinearGradient(0, by - 90, 0, by + 90);
+  bg.addColorStop(0, 'rgba(25,240,216,0)'); bg.addColorStop(0.5, 'rgba(25,240,216,0.045)'); bg.addColorStop(1, 'rgba(25,240,216,0)');
+  ctx.globalAlpha = 1; ctx.fillStyle = bg; ctx.fillRect(0, by - 90, W, 180);
+  // vignette
+  const vg = ctx.createRadialGradient(CX, CY, 400, CX, CY, 1150);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.85)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, W, H);
+  // flash on S completion & final hit
+  const f1 = Math.max(0, 1 - Math.abs(t - 5.22) * 6) * 0.35;
+  const f2 = Math.max(0, 1 - Math.abs(t - 13.3) * 5) * 0.25;
+  if (f1 + f2 > 0) { ctx.fillStyle = `rgba(190,255,248,${f1 + f2})`; ctx.fillRect(0, 0, W, H); }
+  // horizontal glitch displacement slices
+  const g = (t > 5.15 && t < 5.4) || (t > 12.1 && t < 12.35) || (t > 13.25 && t < 13.45);
+  if (g) {
+    const seed = Math.floor(t * 30);
+    for (let i = 0; i < 6; i++) {
+      const y = Math.floor(hash(seed * 13 + i) * H);
+      const h = 8 + Math.floor(hash(seed * 17 + i) * 50);
+      const dx = Math.floor((hash(seed * 19 + i) - 0.5) * 80);
+      ctx.drawImage(cv, 0, y, W, h, dx, y, W, h);
+    }
+  }
+  // final fade to black
+  const fo = prog(t, 14.4, 15);
+  if (fo > 0) { ctx.fillStyle = `rgba(0,0,0,${fo})`; ctx.fillRect(0, 0, W, H); }
+  // fade in from black
+  const fi = 1 - prog(t, 0, 0.3);
+  if (fi > 0) { ctx.fillStyle = `rgba(0,0,0,${fi})`; ctx.fillRect(0, 0, W, H); }
+  ctx.restore();
+}
+
+function render(t) {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  drawBackground(t);
+  drawGridFloor(t);
+  drawParticles(t);
+  drawTraces(t);
+  drawBoot(t);
+  drawLogo(t);
+  drawTitle(t);
+  drawHUD(t);
+  drawPost(t);
+}
+window.render = render;
+window.DURATION = DURATION;
+
+// live preview when opened directly in a browser
+if (!window.__RENDERING__) {
+  const start = performance.now();
+  (function loop() { render(((performance.now() - start) / 1000) % DURATION); requestAnimationFrame(loop); })();
+}
+</script>
+</body>
+</html>
